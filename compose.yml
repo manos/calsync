@@ -1,0 +1,75 @@
+services:
+  calsync:
+    # Build with: docker build -t calsync:latest .
+    # Ship to a host with: docker save calsync:latest | gzip -1 | ssh HOST 'gunzip | docker load'
+    image: calsync:latest
+    container_name: calsync
+    restart: unless-stopped
+    # Host networking: on hosts using Tailscale MagicDNS (100.100.100.100) as the
+    # docker daemon resolver, a bridged container cannot resolve public names.
+    network_mode: host
+    environment:
+      SYNC_INTERVAL: 15m
+      LOG_LEVEL: info
+      TZ: America/New_York
+      ICLOUD_USER: ${ICLOUD_USER:?set in .env}
+      ICLOUD_APP_PASSWORD: ${ICLOUD_APP_PASSWORD:?set in .env}
+      GOOGLE_CLIENT_ID_WORK: ${GOOGLE_CLIENT_ID_WORK:?set in .env}
+      GOOGLE_CLIENT_SECRET_WORK: ${GOOGLE_CLIENT_SECRET_WORK:?set in .env}
+      GOOGLE_REFRESH_TOKEN_WORK: ${GOOGLE_REFRESH_TOKEN_WORK:?run calsync auth, then set in .env}
+      GOOGLE_CLIENT_ID_PERSONAL: ${GOOGLE_CLIENT_ID_PERSONAL:?set in .env}
+      GOOGLE_CLIENT_SECRET_PERSONAL: ${GOOGLE_CLIENT_SECRET_PERSONAL:?set in .env}
+      GOOGLE_REFRESH_TOKEN_PERSONAL: ${GOOGLE_REFRESH_TOKEN_PERSONAL:?run calsync auth, then set in .env}
+      TRIPIT_ICS_URL: ${TRIPIT_ICS_URL:?set in .env}
+    configs:
+      - source: calsync_config
+        target: /config.yaml
+
+configs:
+  calsync_config:
+    content: |
+      accounts:
+        icloud_personal:
+          type: caldav
+          url: https://caldav.icloud.com
+          username: $${ICLOUD_USER}
+          password: $${ICLOUD_APP_PASSWORD}
+        gmail_work:
+          type: google
+          client_id: $${GOOGLE_CLIENT_ID_WORK}
+          client_secret: $${GOOGLE_CLIENT_SECRET_WORK}
+          refresh_token: $${GOOGLE_REFRESH_TOKEN_WORK}
+        gmail_personal:
+          type: google
+          client_id: $${GOOGLE_CLIENT_ID_PERSONAL}
+          client_secret: $${GOOGLE_CLIENT_SECRET_PERSONAL}
+          refresh_token: $${GOOGLE_REFRESH_TOKEN_PERSONAL}
+        tripit:
+          type: ics
+          url: $${TRIPIT_ICS_URL}
+
+      defaults:
+        window: {past: 1d, future: 14d}
+        padding: {before: 0m, after: 0m}
+        privacy: busy
+        skip: {declined: true, free: true, all_day: true, cancelled: true, mirrors: true}
+        max_deletes_per_pass: 20
+
+      syncs:
+        - id: personal-to-work
+          source: {account: icloud_personal, calendar: "Personal"}
+          dest: {account: gmail_work, calendar: primary}
+          privacy: busy
+          title: "Busy"
+          padding: {before: 15m, after: 15m}
+
+        - id: work-to-personal
+          source: {account: gmail_work, calendar: primary}
+          dest: {account: gmail_personal, calendar: "schluting@gmail.com"}
+          privacy: full
+
+        - id: tripit-to-work
+          source: {account: tripit, calendar: feed}
+          dest: {account: gmail_work, calendar: primary}
+          privacy: busy
+          title: "Busy"
