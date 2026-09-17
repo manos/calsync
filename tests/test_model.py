@@ -1,5 +1,5 @@
 import dataclasses
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -74,6 +74,27 @@ def test_raw_is_excluded_from_equality():
     addressed = CalEvent(uid="a", raw={"href": "/cal/a.ics"}, **times)
     assert bare == addressed
     assert hash(bare) == hash(addressed)
+
+
+def test_travel_before_defaults_to_no_travel():
+    event = CalEvent(
+        uid="a",
+        start=datetime(2026, 5, 1, 9, 0, tzinfo=UTC),
+        end=datetime(2026, 5, 1, 10, 0, tzinfo=UTC),
+    )
+    assert event.travel_before == timedelta(0)
+
+
+def test_event_rejects_negative_travel_time():
+    """Negative lead time would push a mirror's start *after* the event begins."""
+    with pytest.raises(ValueError, match="travel_before") as excinfo:
+        CalEvent(
+            uid="evt-42",
+            start=datetime(2026, 5, 1, 9, 0, tzinfo=UTC),
+            end=datetime(2026, 5, 1, 10, 0, tzinfo=UTC),
+            travel_before=timedelta(minutes=-30),
+        )
+    assert "evt-42" in str(excinfo.value)
 
 
 def test_is_mirror_reflects_marker():

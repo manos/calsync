@@ -49,6 +49,27 @@ syncs:
     dest: {account: shared, calendar: Shared}
 """
 
+# A chain: personal -> work -> shared, with the loop guard deliberately off on the
+# second hop so that sync really does mirror the first hop's mirror. ``skip.mirrors``
+# is a flag rather than a law, so this is a configuration a user can reach -- and it
+# is the arrangement in which a lead time applied twice would show up.
+CONFIG_CHAIN = """
+accounts:
+  icloud: {type: caldav, url: https://caldav.icloud.com, username: me@x.com, password: pw}
+  work: {type: google, client_id: c, client_secret: s, refresh_token: r}
+  shared: {type: google, client_id: c, client_secret: s, refresh_token: r}
+
+syncs:
+  - id: personal-to-work
+    source: {account: icloud, calendar: Home}
+    dest: {account: work, calendar: primary}
+    padding: {before: 15m, after: 15m}
+  - id: work-to-shared
+    source: {account: work, calendar: primary}
+    dest: {account: shared, calendar: Shared}
+    skip: {mirrors: false}
+"""
+
 # One instant for the whole module. Recomputing ``datetime.now`` per call would
 # make an event's start and the assertion about it differ by a second whenever
 # the clock ticks between them, turning these into occasional false failures.
@@ -193,6 +214,36 @@ def test_the_default_filters_keep_declined_and_all_day_events_off_the_destinatio
     assert set(work.events) == {"standup", "dentist"}
     assert [e.title for e in shared.events.values()] == ["Standup"]
     assert "Dentist" not in repr(shared.events)
+
+
+def test_travel_time_covers_the_drive_once_along_a_whole_chain(tmp_path):
+    """The real defect: iCloud knows about the drive, the work calendar did not.
+
+    A showing an hour and a half away was mirrored as the hour it occupies, so the
+    work calendar showed the user free for the whole drive there. The mirror now
+    starts 90 minutes of travel plus 15 minutes of padding before the event.
+
+    The second sync in the chain (work -> shared) then mirrors that mirror. It must
+    reproduce the block as it stands: the drive is already inside the mirror's
+    start, and adding it again would move the shared calendar's copy 90 minutes
+    earlier than the block it copies.
+    """
+    showing = event("showing", "HTR Durango showing", 24, travel_before=timedelta(minutes=90))
+    icloud = FakeProvider([showing])
+    work = FakeProvider()
+    shared = FakeProvider()
+
+    providers = {"icloud": icloud, "work": work, "shared": shared}
+    assert run(tmp_path, providers, CONFIG_CHAIN) == 0
+
+    (block,) = mirrors(work)
+    assert block.start == soon(24) - timedelta(minutes=105)
+    assert block.end == soon(25) + timedelta(minutes=15)
+    # Nothing downstream can be handed a lead time that has already been applied.
+    assert block.travel_before == timedelta(0)
+
+    (copy,) = mirrors(shared)
+    assert (copy.start, copy.end) == (block.start, block.end)
 
 
 def test_two_syncs_sharing_a_destination_reap_only_their_own_mirrors(tmp_path):

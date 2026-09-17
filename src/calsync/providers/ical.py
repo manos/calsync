@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 
 from icalendar import Event as IEvent
+from icalendar import vDuration
 
 from calsync.marker import (
     ICAL_PROP_HASH,
@@ -20,6 +21,12 @@ from calsync.marker import (
     parse_mirror_uid,
 )
 from calsync.model import Marker
+
+# Apple Calendar's travel time. It is lead time -- the journey *to* the event -- and
+# Apple records no counterpart for the journey home, so nothing here invents one.
+APPLE_TRAVEL_DURATION = "X-APPLE-TRAVEL-DURATION"
+# The longest run of calendar-controlled text quoted back in a failure message.
+MAX_VALUE_DETAIL = 50
 
 
 def as_utc(value: dt.datetime | dt.date) -> tuple[dt.datetime, bool]:
@@ -56,6 +63,55 @@ def span(component: IEvent) -> tuple[dt.datetime, dt.datetime, bool]:
         # event as an hour long would mirror it as an hour of busy time.
         end = start + (dt.timedelta(days=1) if all_day else dt.timedelta(hours=1))
     return start, end, all_day
+
+
+def _as_duration(value: object) -> dt.timedelta | None:
+    """One property value as a timedelta, or ``None`` if it does not hold one."""
+    try:
+        decoded = value.dt
+    except AttributeError:
+        # No VALUE=DURATION parameter, so icalendar had no type to decode against and
+        # left the raw text alone. Servers that re-serialise an event do drop it.
+        decoded = None
+    except ValueError:
+        # icalendar decoded it against VALUE=DURATION and rejected what it found.
+        decoded = None
+    if decoded is not None:
+        # Decoded as something that is not a duration at all -- a DATE-TIME, say --
+        # is a malformed property, not text to have another go at.
+        return decoded if isinstance(decoded, dt.timedelta) else None
+    try:
+        return vDuration.from_ical(str(value))
+    except ValueError:
+        return None
+
+
+def travel_before(component: IEvent, uid: str) -> dt.timedelta:
+    """Lead time the calendar records apart from the event's own span.
+
+    Apple Calendar stores the journey to an event in ``X-APPLE-TRAVEL-DURATION``
+    and leaves DTSTART alone, so an event read from its span alone shows the user
+    free while they are actually still driving. There is no counterpart for the
+    journey home -- Apple records none -- so this is lead time only.
+
+    Google Calendar has no equivalent: travel time there is a Maps feature of the
+    UI, not data on the event, which is why this lives in the iCalendar reader.
+    """
+    value = component.get(APPLE_TRAVEL_DURATION)
+    if value is None:
+        return dt.timedelta(0)
+    duration = _as_duration(value)
+    if duration is None:
+        # Reported rather than ignored, for the same reason a DTEND that will not
+        # decode is: silently mirroring a block that is missing an hour and a half
+        # of the user's afternoon is worse than naming the event that broke.
+        raise ValueError(
+            f"{APPLE_TRAVEL_DURATION} is not a duration: "
+            f"{str(value)[:MAX_VALUE_DETAIL]!r} (uid={uid!r})"
+        )
+    # Zero means "no travel"; a negative value cannot describe a journey at all, and
+    # CalEvent rejects one outright. Both say the same thing here.
+    return max(duration, dt.timedelta(0))
 
 
 def read_marker(component: IEvent, uid: str, description: str) -> Marker | None:
