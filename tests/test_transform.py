@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from calsync.config import PaddingSpec, load_config
@@ -115,6 +115,73 @@ def test_mirrored_events_survive_when_the_loop_guard_is_disabled():
 def test_filtered_events_never_reach_the_desired_set():
     mirrors = desired_mirrors([event(uid="a"), event(uid="b", declined=True)], spec(0))
     assert len(mirrors) == 1
+
+
+# The real event that exposed this: an iCloud showing an hour and a half's drive
+# away. Apple renders the drive as a block before 09:00 but leaves DTSTART at 09:00,
+# so a mirror built from the span alone showed the user free the whole way there.
+TRAVEL_EVENT = {
+    "start": datetime(2026, 9, 18, 9, 0, tzinfo=UTC),
+    "end": datetime(2026, 9, 18, 10, 0, tzinfo=UTC),
+    "travel_before": timedelta(minutes=90),
+}
+SYMMETRIC_PADDING = PaddingSpec(before=timedelta(minutes=15), after=timedelta(minutes=15))
+
+
+def spec_with_padding(padding: PaddingSpec, index: int = 0):
+    return spec(index).model_copy(update={"padding": padding})
+
+
+def test_travel_time_and_padding_both_extend_the_mirrors_start():
+    """15m of padding on top of a 90m drive: the mirror starts 105m before the event."""
+    sync = spec_with_padding(SYMMETRIC_PADDING)
+    (mirror,) = desired_mirrors([event(**TRAVEL_EVENT)], sync).values()
+    assert mirror.start == datetime(2026, 9, 18, 7, 15, tzinfo=UTC)
+    assert mirror.end == datetime(2026, 9, 18, 10, 15, tzinfo=UTC)
+
+
+def test_travel_time_alone_extends_the_start_and_leaves_the_end_alone():
+    """Apple records no return journey, so nothing is added after the event."""
+    sync = spec_with_padding(PaddingSpec())
+    (mirror,) = desired_mirrors([event(**TRAVEL_EVENT)], sync).values()
+    assert mirror.start == datetime(2026, 9, 18, 7, 30, tzinfo=UTC)
+    assert mirror.end == datetime(2026, 9, 18, 10, 0, tzinfo=UTC)
+
+
+def test_an_event_without_travel_time_is_padded_exactly_as_before():
+    sync = spec_with_padding(SYMMETRIC_PADDING)
+    without = {**TRAVEL_EVENT, "travel_before": timedelta(0)}
+    (mirror,) = desired_mirrors([event(**without)], sync).values()
+    assert mirror.start == datetime(2026, 9, 18, 8, 45, tzinfo=UTC)
+    assert mirror.end == datetime(2026, 9, 18, 10, 15, tzinfo=UTC)
+
+
+def test_travel_time_keeps_the_key_and_changes_the_hash():
+    # Same reasoning as padding: the key comes from the UNTRAVELLED source start, so
+    # honouring travel time updates existing mirrors instead of deleting every one
+    # of them and creating a replacement.
+    (with_travel,) = desired_mirrors([event(**TRAVEL_EVENT)], spec(0)).values()
+    without = {**TRAVEL_EVENT, "travel_before": timedelta(0)}
+    (without_travel,) = desired_mirrors([event(**without)], spec(0)).values()
+    assert with_travel.start != without_travel.start
+    assert with_travel.marker.key == without_travel.marker.key
+    assert with_travel.marker.hash != without_travel.marker.hash
+
+
+def test_travel_time_on_an_all_day_source_is_ignored():
+    """Lead time on a whole-day block says nothing, and applying it would force the
+    all-day form to a timed one -- which renders a day early west of Greenwich."""
+    source = event(
+        start=datetime(2026, 9, 18, tzinfo=UTC),
+        end=datetime(2026, 9, 19, tzinfo=UTC),
+        all_day=True,
+        travel_before=timedelta(minutes=90),
+    )
+    # privacy: full, so the all-day form survives; a busy mirror is timed regardless.
+    (mirror,) = desired_mirrors([source], spec_with_skip(1, all_day=False)).values()
+    assert mirror.all_day is True
+    assert mirror.start == datetime(2026, 9, 18, tzinfo=UTC)
+    assert mirror.end == datetime(2026, 9, 19, tzinfo=UTC)
 
 
 def test_changing_padding_keeps_the_key_and_changes_the_hash():

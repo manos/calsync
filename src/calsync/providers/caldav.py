@@ -20,7 +20,7 @@ from calsync.marker import (
 )
 from calsync.model import CalEvent
 from calsync.providers.base import ProviderError, TransientError, Window
-from calsync.providers.ical import read_marker, span, text
+from calsync.providers.ical import read_marker, span, text, travel_before
 from calsync.retry import retry_call
 
 TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
@@ -212,6 +212,7 @@ def _to_event(component: IEvent, href: str, email: str) -> CalEvent:
         description=strip_marker(description),
         location=text(component, "location"),
         all_day=all_day,
+        travel_before=travel_before(component, uid),
         cancelled=text(component, "status").upper() == "CANCELLED",
         declined=_self_declined(component, email),
         transparent=text(component, "transp").upper() == "TRANSPARENT",

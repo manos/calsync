@@ -2,7 +2,7 @@ import functools
 import gzip
 import time
 import urllib.error
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -86,6 +86,20 @@ DTSTART:20260502T130000Z
 DTEND:20260502T140000Z
 STATUS:CANCELLED
 TRANSP:TRANSPARENT
+END:VEVENT
+END:VCALENDAR
+"""
+
+# A feed carrying Apple's travel time: the drive is a property of its own, so the
+# span alone shows the user free while they are still on the road.
+TRAVEL = """BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:src-travel
+SUMMARY:HTR Durango showing
+DTSTART:20260502T150000Z
+DTEND:20260502T160000Z
+X-APPLE-TRAVEL-DURATION;VALUE=DURATION:PT1H30M
 END:VEVENT
 END:VCALENDAR
 """
@@ -264,6 +278,26 @@ def test_an_all_day_event_that_ends_where_it_starts_spans_one_day():
     assert event.all_day is True
     assert event.start == datetime(2026, 5, 2, tzinfo=UTC)
     assert event.end == datetime(2026, 5, 3, tzinfo=UTC)
+
+
+def test_reads_apple_travel_time_from_a_feed():
+    """The reader is shared with CalDAV, so a feed gains travel time for free."""
+    (event,) = provider(StubFeed(TRAVEL)).list_events(WINDOW)
+    assert event.travel_before == timedelta(minutes=90)
+    assert event.start == datetime(2026, 5, 2, 15, 0, tzinfo=UTC)
+    assert event.end == datetime(2026, 5, 2, 16, 0, tzinfo=UTC)
+
+
+def test_an_event_in_a_feed_without_travel_time_has_none():
+    (event,) = provider(StubFeed(TIMED)).list_events(WINDOW)
+    assert event.travel_before == timedelta(0)
+
+
+def test_a_malformed_travel_duration_in_a_feed_is_reported_not_crashed():
+    ics = TRAVEL.replace("PT1H30M", "banana")
+    with pytest.raises(ProviderError) as excinfo:
+        provider(StubFeed(ics)).list_events(WINDOW)
+    assert "src-travel" in str(excinfo.value)
 
 
 def test_parses_status_and_transparency():

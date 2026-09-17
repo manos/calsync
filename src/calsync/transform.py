@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+from datetime import timedelta
 
 from calsync.config import SkipSpec, SyncSpec
 from calsync.marker import content_hash, mirror_key, mirror_uid, strip_marker
@@ -27,13 +28,30 @@ def skip_reason(event: CalEvent, skip: SkipSpec) -> str | None:
     return None
 
 
+def lead_time(event: CalEvent, spec: SyncSpec) -> timedelta:
+    """How far before its source an event's mirror should start.
+
+    Configured padding and the source's own travel time stack: the padding is a
+    buffer the user asked for around every event, and the travel time is the drive
+    their calendar already knows about. Both are time they are not free.
+
+    Travel time is dropped on an all-day source. A lead time on a whole-day block
+    says nothing useful, and subtracting it would move the start off midnight --
+    which is exactly what forces the all-day form to a timed one.
+    """
+    travel = timedelta(0) if event.all_day else event.travel_before
+    return spec.padding.before + travel
+
+
 def build_mirror(event: CalEvent, spec: SyncSpec) -> CalEvent:
     """Construct the mirror a single source event should produce."""
     key = mirror_key(spec.id, event.uid, event.start)
     busy = spec.privacy == "busy"
     mirror = CalEvent(
         uid=mirror_uid(spec.id, key),
-        start=event.start - spec.padding.before,
+        # The end takes padding only: travel time is the journey *to* the event, and
+        # no source records a journey home for calsync to mirror.
+        start=event.start - lead_time(event, spec),
         end=event.end + spec.padding.after,
         title=spec.title if busy else event.title,
         description="" if busy else strip_marker(event.description),

@@ -24,7 +24,8 @@ In scope:
   direction.
 - One-way mirroring per configured sync. Bidirectional behaviour is achieved by
   configuring two syncs, which the loop guard keeps from ping-ponging.
-- Privacy transform ("Busy" only) and time padding.
+- Privacy transform ("Busy" only), time padding, and honouring the travel time an
+  iCalendar source records.
 - Propagating creates, updates, and deletes.
 
 Out of scope:
@@ -55,7 +56,7 @@ Modules, each independently testable:
 | `providers/factory.py` | The only module that opens a connection: accounts in, providers out |
 | `providers/fake.py` | In-memory Provider, so the whole loop is testable offline |
 | `retry.py` | Exponential backoff with jitter, on `TransientError` only |
-| `transform.py` | Filters, padding, privacy transform, desired-mirror construction |
+| `transform.py` | Filters, padding, travel time, privacy transform, desired-mirror construction |
 | `sync.py` | Diff desired vs. existing mirrors; emit and apply operations |
 | `runner.py` | Run every sync once or on an interval; heartbeat; provider lifetime |
 | `cli.py` | `sync [--once] [--dry-run]`, `validate`, `auth`, `healthcheck` |
@@ -169,6 +170,19 @@ Each is a per-sync toggle, all defaulting to `true`:
 - **Padding:** `before` and `after` durations shift the mirror's start and end.
   Overlapping results are left overlapping — strict 1:1 mapping between a source
   event and its mirror keeps identity trivial and diffs cheap.
+- **Travel time:** an iCloud or ICS source records Apple Calendar's travel time in
+  `X-APPLE-TRAVEL-DURATION`, a property of its own, leaving DTSTART/DTEND untouched;
+  read from the span alone, the mirror left the user apparently free for the drive.
+  The duration extends the mirror's *start*, stacking with `padding.before`. It is
+  lead time only — Apple records no return journey, and calsync does not invent one,
+  so the mirror's end takes `padding.after` and nothing else. It is on by default
+  with no configuration key: the source either records travel time or it does not.
+  Ignored on an all-day source, where a lead time is meaningless and would force the
+  all-day form to a timed block. A Google source contributes none, because Google
+  Calendar holds no equivalent — travel time there is a Maps feature of the UI, not
+  event data — which is why this lives in the shared iCalendar reader, where the
+  CalDAV and ICS providers both pick it up. The mirror carries no travel property of
+  its own, so an `A→B→C` chain cannot apply the same lead time twice.
 - **Privacy `busy`:** title replaced with the configured string (default `"Busy"`);
   description, location, attendees, and the all-day flag dropped, so a busy mirror is
   always a timed block.
@@ -307,6 +321,8 @@ Behaviour-level tests against an in-memory `FakeProvider` implementing the Proto
 so the full sync loop is exercised without network access:
 
 - padding arithmetic, including across a DST boundary
+- travel time: parsed from a VEVENT, stacked with padding, ignored on an all-day
+  source, absent from the mirror written back, and never compounding over passes
 - each filter, individually
 - create, update, and delete propagation
 - loop guard: a mirrored event is never re-mirrored

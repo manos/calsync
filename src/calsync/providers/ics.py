@@ -19,7 +19,7 @@ from icalendar import Event as IEvent
 from calsync.marker import strip_marker
 from calsync.model import CalEvent
 from calsync.providers.base import ProviderError, TransientError, Window
-from calsync.providers.ical import read_marker, span, text
+from calsync.providers.ical import read_marker, span, text, travel_before
 from calsync.retry import retry_call
 
 TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
@@ -299,6 +299,7 @@ def _to_event(component: IEvent) -> CalEvent:
         description=strip_marker(description),
         location=text(component, "location"),
         all_day=all_day,
+        travel_before=travel_before(component, uid),
         cancelled=text(component, "status").upper() == "CANCELLED",
         # A feed carries no identity for whoever is reading it, so no ATTENDEE line
         # on it can be read as the user's own decline.

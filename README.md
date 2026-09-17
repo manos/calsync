@@ -191,7 +191,7 @@ A non-empty list. Each entry:
 | `dest.calendar` | *required* | Same rule as `source.calendar`. The `dest` pair must not equal the `source` pair, or the sync would mirror into itself. |
 | `window.past` | `1d` | How far back to look. Events outside the window are never touched. |
 | `window.future` | `14d` | How far ahead to look |
-| `padding.before` | `0m` | Shifts the mirror's start earlier |
+| `padding.before` | `0m` | Shifts the mirror's start earlier. Stacks on top of any travel time the source records — see [Operating notes](#operating-notes). |
 | `padding.after` | `0m` | Shifts the mirror's end later |
 | `privacy` | `busy` | `busy` copies no detail: the title becomes `title`, and description, location, and the all-day flag are dropped. `full` copies title, description, location, and the all-day flag verbatim. |
 | `title` | `Busy` | The mirror's title under `privacy: busy`. Ignored under `full`. |
@@ -364,6 +364,21 @@ actually block time: `workingLocation`, `birthday`, and `fromGmail`. calsync rea
 those as free, so the default `skip.free` drops them and your destination does not
 fill with daily noise. `focusTime` and `outOfOffice` are deliberately *not* in that
 set — they do block time, and they are mirrored.
+
+**Travel time.** Apple Calendar records the journey to an event in a property of
+its own (`X-APPLE-TRAVEL-DURATION`) and leaves the event's own start alone, so an
+iCloud event read from its start and end alone showed you free while you were still
+driving. calsync subtracts that travel time from the mirror's start, on top of
+`padding.before`: a 09:00–10:00 event 90 minutes away, with `padding.before: 15m`
+and `padding.after: 15m`, is mirrored as 07:15–10:15. It is *lead* time only —
+Apple records no return journey, so nothing is added after the event — and it is
+ignored on an all-day source, where a lead time says nothing useful and would force
+the block off midnight. There is nothing to switch on: every CalDAV and ICS source
+contributes it. A Google source contributes none, because Google Calendar has no
+such data — travel time there is a Maps feature of the web UI, not part of the
+event. Mirrors themselves never carry the property, so the lead time is baked into
+the mirror's start exactly once and cannot be added again by a second sync reading
+that mirror.
 
 **All-day events.** Internally an all-day event is UTC midnight to UTC midnight, and
 it is written back in the backend's native all-day form (a `date` value on Google, a

@@ -1,5 +1,5 @@
 import functools
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from caldav.davclient import requests as dav_http
@@ -13,6 +13,7 @@ from calsync.providers.caldav import CaldavProvider, _to_ical
 from calsync.providers.fake import FakeProvider
 from calsync.retry import retry_call
 from calsync.sync import run_sync
+from calsync.transform import build_mirror
 
 
 @pytest.fixture(autouse=True)
@@ -76,6 +77,21 @@ BEGIN:VEVENT
 UID:src-bare-allday
 SUMMARY:Holiday
 DTSTART;VALUE=DATE:20260502
+END:VEVENT
+END:VCALENDAR
+"""
+
+# Exactly as iCloud serves it: the travel time is a property of its own and
+# DTSTART/DTEND are untouched, so the drive is invisible to anything reading the span.
+TRAVEL = """BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:src-travel
+SUMMARY:HTR Durango showing
+DTSTART;TZID=America/Denver:20260918T090000
+DTEND;TZID=America/Denver:20260918T100000
+X-APPLE-TRAVEL-DURATION;VALUE=DURATION:PT1H30M
+X-APPLE-TRAVEL-START;X-TITLE=Home;X-APPLE-RADIUS=100;VALUE=URI:geo:37.585568,-108.159774
 END:VEVENT
 END:VCALENDAR
 """
@@ -242,6 +258,53 @@ def test_an_all_day_event_with_no_end_defaults_to_one_day():
     assert event.all_day is True
     assert event.start == datetime(2026, 5, 2, tzinfo=UTC)
     assert event.end == datetime(2026, 5, 3, tzinfo=UTC)
+
+
+def test_reads_apple_travel_time_as_lead_time_without_moving_the_event():
+    """Apple keeps travel out of DTSTART/DTEND, so the span must come back untouched."""
+    p = provider(StubCalendar([StubObject(TRAVEL, "/cal/travel.ics")]))
+    (event,) = p.list_events(WINDOW)
+    assert event.travel_before == timedelta(minutes=90)
+    assert event.start == datetime(2026, 9, 18, 15, 0, tzinfo=UTC)
+    assert event.end == datetime(2026, 9, 18, 16, 0, tzinfo=UTC)
+
+
+def test_an_event_with_no_travel_property_has_no_travel_time():
+    p = provider(StubCalendar([StubObject(TIMED, "/cal/1.ics")]))
+    (event,) = p.list_events(WINDOW)
+    assert event.travel_before == timedelta(0)
+
+
+def test_a_travel_duration_stripped_of_its_value_parameter_is_still_read():
+    """A server that re-serialises the property without VALUE=DURATION must not lose it."""
+    ics = TRAVEL.replace("X-APPLE-TRAVEL-DURATION;VALUE=DURATION:", "X-APPLE-TRAVEL-DURATION:")
+    (event,) = provider(StubCalendar([StubObject(ics, "/cal/travel.ics")])).list_events(WINDOW)
+    assert event.travel_before == timedelta(minutes=90)
+
+
+@pytest.mark.parametrize("value", ["PT0S", "-PT1H"], ids=["zero", "negative"])
+def test_a_zero_or_negative_travel_duration_reads_as_no_travel(value: str):
+    """Neither can describe a drive, and a negative one would shrink the mirror."""
+    ics = TRAVEL.replace("PT1H30M", value)
+    (event,) = provider(StubCalendar([StubObject(ics, "/cal/travel.ics")])).list_events(WINDOW)
+    assert event.travel_before == timedelta(0)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["banana", "20260918T150000Z"],
+    ids=["not-a-duration", "a-timestamp"],
+)
+def test_a_malformed_travel_duration_is_reported_as_a_provider_error(value: str):
+    """One unreadable property must not escape as a bare ValueError through the contract."""
+    ics = TRAVEL.replace("PT1H30M", value)
+    p = provider(StubCalendar([StubObject(ics, "/cal/travel.ics")]))
+    with pytest.raises(ProviderError) as excinfo:
+        p.list_events(WINDOW)
+    message = str(excinfo.value)
+    assert "/cal/travel.ics" in message
+    assert "src-travel" in message
+    assert "X-APPLE-TRAVEL-DURATION" in message
 
 
 def test_parses_status_transparency_and_own_rsvp():
@@ -775,7 +838,9 @@ class LossyCalendar(StubCalendar):
         return obj
 
 
-def run_passes(calendar: LossyCalendar, count: int) -> list[tuple[int, int, int]]:
+def run_passes(
+    calendar: LossyCalendar, count: int, travel: timedelta = timedelta(0)
+) -> list[tuple[int, int, int]]:
     spec = load_config(SYNC_CONFIG, env={}).syncs[0]
     source = FakeProvider(
         [
@@ -784,6 +849,7 @@ def run_passes(calendar: LossyCalendar, count: int) -> list[tuple[int, int, int]
                 start=datetime(2026, 5, 2, 9, 0, tzinfo=UTC),
                 end=datetime(2026, 5, 2, 10, 0, tzinfo=UTC),
                 title="Dentist",
+                travel_before=travel,
             )
         ]
     )
@@ -818,6 +884,48 @@ def test_a_mirror_that_lost_both_channels_is_updated_not_duplicated():
     calendar = LossyCalendar(drop_properties=True, drop_description=True)
     assert run_passes(calendar, 5) == [(1, 0, 0)] + [(0, 1, 0)] * 4
     assert len(calendar.objects) == 1
+
+
+def test_a_mirror_of_a_travelling_event_carries_no_travel_time_of_its_own():
+    """The drive is baked into the mirror's start, so the mirror must not restate it.
+
+    A mirror that advertised the travel duration as a property of its own would hand
+    the next sync in an A->B->C chain a lead time it has already been paid: B's
+    mirror would start 90 minutes before A's mirror, which already started 90
+    minutes before the event.
+    """
+    spec = load_config(SYNC_CONFIG, env={}).syncs[0]
+    source = CalEvent(
+        uid="src-travel",
+        start=datetime(2026, 5, 2, 9, 0, tzinfo=UTC),
+        end=datetime(2026, 5, 2, 10, 0, tzinfo=UTC),
+        title="HTR Durango showing",
+        travel_before=timedelta(minutes=90),
+    )
+    written = build_mirror(source, spec)
+    assert written.travel_before == timedelta(0)
+    assert written.start == datetime(2026, 5, 2, 7, 30, tzinfo=UTC)
+
+    stored = _to_ical(written)
+    assert "X-APPLE-TRAVEL-DURATION" not in stored
+
+    (read_back,) = provider(StubCalendar([StubObject(stored, "/cal/rt.ics")])).list_events(WINDOW)
+    assert read_back.travel_before == timedelta(0)
+    assert read_back.start == written.start
+
+
+def test_repeated_passes_over_a_travelling_event_do_not_accumulate_travel_time():
+    """Five passes through a real iCalendar round trip leave the start where it was.
+
+    The mirror is written, read back, and compared against a freshly built one on
+    every pass. If any of that re-derived the drive, the start would walk 90 minutes
+    earlier each time and each pass would report an update.
+    """
+    calendar = LossyCalendar()
+    assert run_passes(calendar, 5, travel=timedelta(minutes=90)) == [(1, 0, 0)] + [(0, 0, 0)] * 4
+    (stored,) = calendar.objects
+    assert "DTSTART:20260502T073000Z" in stored.data
+    assert "X-APPLE-TRAVEL-DURATION" not in stored.data
 
 
 def test_closing_the_provider_closes_the_http_session():
