@@ -1,7 +1,7 @@
 [project]
 name = "calsync"
 version = "0.1.0"
-description = "Stateless one-way calendar mirroring between Google Calendar and CalDAV"
+description = "Stateless calendar sync in a Docker container: full copies or Busy blocks across Google Calendar, iCloud and ICS feeds"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

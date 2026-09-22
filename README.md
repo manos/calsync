@@ -1,13 +1,20 @@
 # calsync
 
-calsync mirrors calendar events one way, from a source calendar to a destination
-calendar, so that time blocked in one place shows as blocked in another. It speaks
-Google Calendar and CalDAV (exercised against iCloud) in either direction, and each
-mirror can be a padded, detail-free `Busy` block or a full copy of the source event.
-It keeps **no state** — no database, no cache, no volume: every mirror carries the
-identity it needs to be matched back to its source on the next pass, so a pass over
-unchanged input is a no-op and a source event that disappears simply loses its mirror.
-It ships as a Docker container that runs a sync pass on an interval.
+**Stateless calendar sync in a single Docker container.** calsync keeps your
+calendars in agreement across Google Calendar, iCloud (CalDAV) and ICS feeds,
+so time blocked in one place shows as blocked everywhere else.
+
+- **Full copy or just `Busy`.** Each sync chooses: mirror the whole event, or drop
+  a detail-free `Busy` block — optionally padded for travel — so a work calendar
+  reflects your personal commitments without revealing what they are.
+- **Any direction.** Personal → work, work → personal, a travel feed into both:
+  declare as many syncs as you like, and a loop guard keeps mirrors from ping-ponging.
+- **No state.** No database, no cache, no volume to back up. Every mirror carries
+  the identity needed to match it to its source, so an unchanged pass is a no-op and
+  a deleted source event simply loses its mirror. Lose the container, start a new
+  one, and it picks up exactly where it left off.
+- **Just a container.** One image, one `compose.yml`, one `.env`. It runs a sync
+  pass on an interval and gets out of the way.
 
 ## Quick start
 
@@ -431,10 +438,11 @@ DST-dependent, so the same occurrence would re-key, and thus be deleted and
 re-created, whenever the host moved or the clocks changed. UTC is wrong by a fixed
 offset; local is wrong unpredictably.
 
-**One way, one event at a time.** Overlapping mirrors are left overlapping rather than
+**One event, one mirror.** Overlapping mirrors are left overlapping rather than
 merged into a single block — the strict 1:1 mapping between a source occurrence and
-its mirror is what keeps identity derivable and diffs cheap. Bidirectional behaviour
-is two syncs, which the loop guard keeps from ping-ponging.
+its mirror is what keeps identity derivable and diffs cheap. Each sync is a
+directed source → dest mapping; two-way behaviour is two syncs, which the loop guard
+keeps from ping-ponging.
 
 **Windowed, not complete.** Only the configured window is read or written. An event
 that moves beyond `window.future` loses its mirror; moved back in, it gains one again.
