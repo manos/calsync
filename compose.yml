@@ -65,7 +65,7 @@ configs:
 
         - id: work-to-personal
           source: {account: gmail_work, calendar: primary}
-          dest: {account: gmail_personal, calendar: "schluting@gmail.com"}
+          dest: {account: gmail_personal, calendar: "you@gmail.com"}
           privacy: full
 
         - id: tripit-to-work

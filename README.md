@@ -456,7 +456,7 @@ pixi run lint    # ruff check + ruff format --check
 pixi run fmt     # ruff format
 ```
 
-The suite runs entirely offline — 303 tests in well under a second. Sync behaviour is
+The suite runs entirely offline — 395 tests in well under a second. Sync behaviour is
 exercised through an in-memory `FakeProvider` that implements the same Protocol as the
 real backends, and the provider parsing tests drive the real Google and CalDAV code
 against literal API payloads and iCalendar text. Nothing in CI opens a socket.
@@ -467,3 +467,7 @@ To build and check the image:
 docker compose build
 docker compose run --rm calsync calsync validate
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

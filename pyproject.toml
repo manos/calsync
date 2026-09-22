@@ -2,6 +2,19 @@
 name = "calsync"
 version = "0.1.0"
 description = "Stateless one-way calendar mirroring between Google Calendar and CalDAV"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Charlie Schluting" }]
+keywords = ["calendar", "caldav", "google-calendar", "icloud", "sync"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Scheduling",
+]
 requires-python = ">=3.13"
 dependencies = [
     "caldav",
@@ -13,6 +26,11 @@ dependencies = [
     "pyyaml",
     "recurring-ical-events",
 ]
+
+[project.urls]
+Homepage = "https://github.com/manos/calsync"
+Source = "https://github.com/manos/calsync"
+Issues = "https://github.com/manos/calsync/issues"
 
 [project.scripts]
 calsync = "calsync.cli:main"
