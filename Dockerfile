@@ -37,7 +37,7 @@ RUN uv venv "$VIRTUAL_ENV" \
 # --build-constraints pins the hatchling that builds the wheel, so this step resolves
 # nothing at build time either, and --no-deps keeps the lock the only source of deps.
 COPY requirements-build.lock ./
-COPY pyproject.toml ./
+COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN uv pip install --no-deps --build-constraints requirements-build.lock .
 
